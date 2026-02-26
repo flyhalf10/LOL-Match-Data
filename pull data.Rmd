@@ -10,77 +10,129 @@ library(httr)
 library(jsonlite)
 library(dplyr)
 library(purrr)
+library(tibble)
 ```
 
+## Configuration
 
 ```{r}
-api_key <- "RGAPI-b92c516c-56e3-4ca4-89ec-1c29047abd9c"
+# Set this in your shell before knitting:
+# export RIOT_API_KEY="RGAPI-..."
+api_key <- Sys.getenv("RIOT_API_KEY")
+if (api_key == "") {
+  stop("RIOT_API_KEY is empty. Set it before running this document.")
+}
 
-game_name <- "Lightspeed#1234"   # before the #
-tagline <- "NA1"            # after the #
+riot_id <- "Lightspeed#1234"
+platform_region <- "NA1"
+match_count <- 20
 
-url <- paste0(
-  "https://americas.api.riotgames.com/riot/account/v1/accounts/by-riot-id/",
-  URLencode(game_name), "/", URLencode(tagline)
+region_to_routing <- function(region) {
+  region <- toupper(region)
+  if (region %in% c("NA1", "BR1", "LA1", "LA2", "OC1")) return("americas")
+  if (region %in% c("EUW1", "EUN1", "TR1", "RU")) return("europe")
+  if (region %in% c("KR", "JP1")) return("asia")
+  if (region %in% c("PH2", "SG2", "TH2", "TW2", "VN2")) return("sea")
+  stop("Unsupported platform region: ", region)
+}
+
+routing_region <- region_to_routing(platform_region)
+
+riot_id_parts <- strsplit(riot_id, "#", fixed = TRUE)[[1]]
+if (length(riot_id_parts) != 2) {
+  stop("riot_id must look like GameName#TagLine, e.g. Lightspeed#1234")
+}
+game_name <- riot_id_parts[1]
+tag_line <- riot_id_parts[2]
+```
+
+## Riot helper
+
+```{r}
+riot_get <- function(url, api_key) {
+  res <- GET(url, add_headers("X-Riot-Token" = api_key))
+  body_text <- content(res, "text", encoding = "UTF-8")
+  if (status_code(res) >= 300) {
+    stop(sprintf("Request failed (%s): %s", status_code(res), body_text))
+  }
+  fromJSON(body_text, simplifyVector = FALSE)
+}
+```
+
+## 1) Account lookup by Riot ID -> PUUID
+
+```{r}
+account_url <- paste0(
+  "https://", routing_region,
+  ".api.riotgames.com/riot/account/v1/accounts/by-riot-id/",
+  URLencode(game_name, reserved = TRUE), "/",
+  URLencode(tag_line, reserved = TRUE)
 )
 
-res <- GET(url, add_headers("X-Riot-Token" = api_key))
+account_data <- riot_get(account_url, api_key)
+puuid <- account_data$puuid
 
-status_code(res)
-account_data <- fromJSON(content(res, "text", encoding = "UTF-8"))
 account_data
-```
-```{r}
-test_url <- "https://americas.api.riotgames.com/riot/account/v1/accounts/by-riot-id/Lightspeed/NA1"
-
-res <- httr::GET(
-  test_url,
-  httr::add_headers("X-Riot-Token" = api_key)
-)
-
-status_code(res)
-content(res, "text", encoding = "UTF-8")
-```
-
-```{r}
-url <- paste0(
-  "https://", region,
-  ".api.riotgames.com/lol/summoner/v4/summoners/by-name/",
-  summoner_name
-)
-
-res <- GET(url, add_headers("X-Riot-Token" = api_key))
-summoner_data <- fromJSON(content(res, "text", encoding = "UTF-8"))
-
-puuid <- summoner_data$puuid
 puuid
-
 ```
 
+## 2) Pull recent match IDs
+
 ```{r}
-puuid <- "3oEBPNgWwdZHZVdf19Tzh-x53EwPY8Sq-9XRazPvzDsAXN4eou7wgdvU5TfbJBw-27baDJw7_Z8blg"
-match_url <- paste0(
-  "https://americas.api.riotgames.com/lol/match/v5/matches/by-puuid/",
-  puuid,
-  "/ids?start=0&count=20"
+match_ids_url <- paste0(
+  "https://", routing_region,
+  ".api.riotgames.com/lol/match/v5/matches/by-puuid/",
+  URLencode(puuid, reserved = TRUE),
+  "/ids?start=0&count=", match_count
 )
 
-res <- GET(match_url, add_headers("X-Riot-Token" = api_key))
-match_ids <- jsonlite::fromJSON(content(res, "text", encoding = "UTF-8"))
-
+match_ids <- riot_get(match_ids_url, api_key)
 match_ids
 ```
 
+## 3) Pull match details and build a summary table
+
 ```{r}
-get_match <- function(match_id) {
+get_match <- function(match_id, routing_region, api_key) {
   url <- paste0(
-    "https://americas.api.riotgames.com/lol/match/v5/matches/",
+    "https://", routing_region,
+    ".api.riotgames.com/lol/match/v5/matches/",
     match_id
   )
-  
-  res <- GET(url, add_headers("X-Riot-Token" = api_key))
-  jsonlite::fromJSON(content(res, "text", encoding = "UTF-8"))
+  riot_get(url, api_key)
 }
 
-matches <- purrr::map(match_ids, get_match)
+extract_player_row <- function(match_obj, puuid) {
+  info <- match_obj$info
+  player <- keep(info$participants, function(p) identical(p$puuid, puuid))[[1]]
+
+  tibble(
+    match_id = match_obj$metadata$matchId,
+    game_creation_utc = as.POSIXct(
+      info$gameCreation / 1000,
+      origin = "1970-01-01",
+      tz = "UTC"
+    ),
+    queue_id = info$queueId,
+    champion = player$championName,
+    kills = player$kills,
+    deaths = player$deaths,
+    assists = player$assists,
+    kda = round((player$kills + player$assists) / max(1, player$deaths), 2),
+    win = player$win,
+    cs = player$totalMinionsKilled + player$neutralMinionsKilled,
+    vision_score = player$visionScore,
+    game_minutes = round(info$gameDuration / 60, 1)
+  )
+}
+
+matches <- map(match_ids, function(id) {
+  Sys.sleep(1.2) # Avoid bursting requests on development keys
+  get_match(id, routing_region, api_key)
+})
+
+match_summary <- map_dfr(matches, extract_player_row, puuid = puuid) %>%
+  arrange(desc(game_creation_utc))
+
+match_summary
 ```
