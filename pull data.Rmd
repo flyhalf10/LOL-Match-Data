@@ -1,0 +1,86 @@
+---
+title: "League of Legends Data"
+output: html_document
+date: "2026-02-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(purrr)
+```
+
+
+```{r}
+api_key <- "RGAPI-b92c516c-56e3-4ca4-89ec-1c29047abd9c"
+
+game_name <- "Lightspeed#1234"   # before the #
+tagline <- "NA1"            # after the #
+
+url <- paste0(
+  "https://americas.api.riotgames.com/riot/account/v1/accounts/by-riot-id/",
+  URLencode(game_name), "/", URLencode(tagline)
+)
+
+res <- GET(url, add_headers("X-Riot-Token" = api_key))
+
+status_code(res)
+account_data <- fromJSON(content(res, "text", encoding = "UTF-8"))
+account_data
+```
+```{r}
+test_url <- "https://americas.api.riotgames.com/riot/account/v1/accounts/by-riot-id/Lightspeed/NA1"
+
+res <- httr::GET(
+  test_url,
+  httr::add_headers("X-Riot-Token" = api_key)
+)
+
+status_code(res)
+content(res, "text", encoding = "UTF-8")
+```
+
+```{r}
+url <- paste0(
+  "https://", region,
+  ".api.riotgames.com/lol/summoner/v4/summoners/by-name/",
+  summoner_name
+)
+
+res <- GET(url, add_headers("X-Riot-Token" = api_key))
+summoner_data <- fromJSON(content(res, "text", encoding = "UTF-8"))
+
+puuid <- summoner_data$puuid
+puuid
+
+```
+
+```{r}
+puuid <- "3oEBPNgWwdZHZVdf19Tzh-x53EwPY8Sq-9XRazPvzDsAXN4eou7wgdvU5TfbJBw-27baDJw7_Z8blg"
+match_url <- paste0(
+  "https://americas.api.riotgames.com/lol/match/v5/matches/by-puuid/",
+  puuid,
+  "/ids?start=0&count=20"
+)
+
+res <- GET(match_url, add_headers("X-Riot-Token" = api_key))
+match_ids <- jsonlite::fromJSON(content(res, "text", encoding = "UTF-8"))
+
+match_ids
+```
+
+```{r}
+get_match <- function(match_id) {
+  url <- paste0(
+    "https://americas.api.riotgames.com/lol/match/v5/matches/",
+    match_id
+  )
+  
+  res <- GET(url, add_headers("X-Riot-Token" = api_key))
+  jsonlite::fromJSON(content(res, "text", encoding = "UTF-8"))
+}
+
+matches <- purrr::map(match_ids, get_match)
+```
