@@ -16,11 +16,27 @@ library(tibble)
 ## Configuration
 
 ```{r}
-# Set this in your shell before knitting:
-# export RIOT_API_KEY="RGAPI-..."
-api_key <- Sys.getenv("RIOT_API_KEY")
-if (api_key == "") {
-  stop("RIOT_API_KEY is empty. Set it before running this document.")
+# Preferred: keep the key in an environment variable.
+# In RStudio, add this once to ~/.Renviron and restart R:
+# RIOT_API_KEY=RGAPI-...
+api_key <- trimws(Sys.getenv("RIOT_API_KEY", unset = ""))
+api_key <- gsub("^['\"]|['\"]$", "", api_key)
+
+# Fallback for Knit sessions that do not inherit your shell env.
+# Paste your key here only if needed, then clear it before committing/sharing.
+api_key_fallback <- ""
+
+if (!nzchar(api_key)) {
+  api_key <- trimws(api_key_fallback)
+  api_key <- gsub("^['\"]|['\"]$", "", api_key)
+}
+if (!nzchar(api_key)) {
+  stop(paste(
+    "Riot API key is empty.",
+    "Set RIOT_API_KEY in ~/.Renviron (recommended),",
+    "or set api_key_fallback in this chunk.",
+    sep = " "
+  ))
 }
 
 riot_id <- "Lightspeed#1234"
